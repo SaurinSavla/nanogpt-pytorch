@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# --------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 class CausalSelfAttention(nn.Module):
 
@@ -12,15 +12,18 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 % config.n_embd)
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         # not really a 'bias', more of a mask, but following the OpenAI/HuggingFace naming though
+        # self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+        #                             .view(1, 1, config.block_size, config.block_size))
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                    .view(1, 1, config.block_size, config.block_size))
+                                     .view(1, 1, config.block_size, config.block_size))
+        # self.register_buffer("masked_bias", torch.tensor(-1e4), persistent=False)
 
     def forward(self, x):
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
@@ -33,9 +36,9 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # attention (materializes the large (T, T) matrix for all the queries and keys)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=1)
+        att = F.softmax(att, dim=-1)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C)    # re-assemble all head outputs side by side
         #output projection
@@ -93,6 +96,23 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)  #Linear Layer
 
+    def forward(self, idx):
+        # idx is the indices that we pass i.e. the tokens. They are of shape (B, T)
+        B, T = idx.size()
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # forward the token and position embeddings
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
+        pos_emb = self.transformer.wpe(pos) # positional embeddings of shape (T, n_embd)
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
+        x = tok_emb + pos_emb
+        # forward the blocks of the transformer
+        for block in self.transformer.h:
+            x = block(x)
+        # forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+        return logits
+
     @classmethod
     def from_pretrained(cls, model_type):
         """"Loading pretrained GPT-2 model weights from hugging face"""
@@ -124,8 +144,8 @@ class GPT(nn.Module):
 
         # copy while ensuring all of the parameters are aligned and match in names and shapes
         sd_keys_hf = sd_hf.keys()
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] 
-        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')]
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # these can be ignored, they are just a buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')]    # same, just the mask (buffer)
         transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight']
         # the openai checkpoints use a 'Conv1D' module, but we only want to use a vanilla Linear
         # this means that we have to transpose these weights when we import them
@@ -134,6 +154,9 @@ class GPT(nn.Module):
         for k in sd_keys_hf:
             if any(k.endswith(w) for w in transposed):
                 # special treatment for the Conv1D weights we need to transpose
+                # assert sd_hf[k].shape[::-1] == sd[k].shape, f"mismatched shape sd_hf[k].shape[::-1] != sd[k].shape"
+                # print(f"sd_hf[{k}].shape (reversed): {sd_hf[k].shape[::-1]}")
+                # print(f"sd[{k}].shape: {sd[k].shape}")
                 assert sd_hf[k].shape[::-1] == sd[k].shape
                 with torch.no_grad():
                     sd[k].copy_(sd_hf[k].t())
@@ -144,3 +167,57 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+
+# -----------------------------------------------------------------------------
+
+# model = GPT.from_pretrained('gpt2')
+# print("worked, didn't crash!! ")
+
+num_return_sequences = 5
+max_length = 30
+
+model = GPT.from_pretrained('gpt2')
+model.eval()
+# model.to('cuda')
+model.to('cpu')
+
+# prefix tokens
+import tiktoken
+enc = tiktoken.get_encoding('gpt2')
+tokens = enc.encode("Hello, I'm a language model,")
+tokens = torch.tensor(tokens, dtype=torch.long) # (8,)
+tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)    # (5, 8)
+# x = tokens.to('cuda')
+x = tokens.to('cpu')
+
+
+# generate! right now x is (B, T) where B = 5, T = 8
+# set the seed to 42
+# torch.manual_seed(42)
+# torch.cuda.manual_seed(42)
+# torch.cpu.manual_seed(42)
+while x.size(1) < max_length:
+    # forward the model to get the logits
+    with torch.no_grad():
+        logits = model(x)   # (B, T, vocab_size)
+        # take the logits at the last position
+        logits = logits[:, -1, :]   # (B, vocab_size)
+        # get the probabilities
+        probs = F.softmax(logits, dim=-1)
+        # do top-k sampling of the 50 (huggingface pipeline default)
+        # topk_probs here become (5, 50), topk_indices is (5, 50)
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+        # select a token from the top-kprobabilities
+        ix = torch.multinomial(topk_probs, 1)   #   (B, 1)
+        # gather the corresponding indices
+        xcol = torch.gather(topk_indices, -1, ix)   # (B, 1)
+        # append to the sequence
+        x = torch.cat((x, xcol), dim = 1)
+
+# print the generated text
+for i in range (num_return_sequences):
+    tokens = x[i, :max_length].tolist()
+    decoded = enc.decode(tokens)
+    print (">", decoded)
+
+
