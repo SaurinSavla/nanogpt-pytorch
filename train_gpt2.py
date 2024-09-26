@@ -96,7 +96,7 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)  #Linear Layer
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         # idx is the indices that we pass i.e. the tokens. They are of shape (B, T)
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
@@ -111,7 +111,10 @@ class GPT(nn.Module):
         # forward the final layernorm and the classifier
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -194,9 +197,9 @@ y = buf[1:].view(B, T)
 model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model! 
 # model.to('cuda')
 model.to(device)
-logits = model(x)
+logits, loss = model(x, y)
 
-print(logits.shape)
+print(loss)
 import sys; sys.exit(0)
 
 # prefix tokens
