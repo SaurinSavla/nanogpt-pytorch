@@ -178,16 +178,31 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
 
-num_return_sequences = 5
-max_length = 30
+import tiktoken
+enc = tiktoken.get_encoding('gpt2')
+with open('input.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
 
+# get logits
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model! 
-model.eval()
 # model.to('cuda')
 model.to(device)
+logits = model(x)
+
+print(logits.shape)
+import sys; sys.exit(0)
 
 # prefix tokens
+model.eval()
+num_return_sequences = 5
+max_length = 30
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
 tokens = enc.encode("Hello, I'm a language model,")
