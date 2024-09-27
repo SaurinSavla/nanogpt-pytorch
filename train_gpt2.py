@@ -173,6 +173,39 @@ class GPT(nn.Module):
 
 # -----------------------------------------------------------------------------
 
+import tiktoken
+
+class DataLoaderLite:
+    def __init__(self, B, T):
+        self.B = B  # batch size
+        self.T = T  # sequence length
+
+        # at init, load tokens from disk and store them in memory
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        enc = tiktoken.get_encoding('gpt2')
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+        print(f"loaded {len(self.tokens)} tokens")
+        print(f"1 epoch = {len(self.tokens) // (B * T)} batches")
+
+        # state
+        self.current_position = 0
+
+    def next_batch(self):
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position+B*T+1]
+        x = (buf[:-1]).view(B, T)   # inputs
+        y = (buf[1:]).view(B, T)    # targets
+        # advance the position in the tensor
+        self.current_position += B * T
+        # if loading the next batch would be out of bounds, reset
+        if self.current_position + (B * T + 1) > len(self.tokens):
+            self.current_position = 0
+        return x, y
+
+# -----------------------------------------------------------------------------
+
 #attempt to autodetect the device
 device = "cpu"
 if torch.cuda.is_available():
@@ -181,34 +214,33 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
 
-import tiktoken
-enc = tiktoken.get_encoding('gpt2')
-with open('input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
-B, T = 4, 32
-buf = torch.tensor(tokens[:B*T + 1])
-buf = buf.to(device)
-x = buf[:-1].view(B, T)
-y = buf[1:].view(B, T)
+#get a data batch
+train_loader = DataLoaderLite(B=4, T=32)
 
 # get logits
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model! 
 # model.to('cuda')
 model.to(device)
-logits, loss = model(x, y)
 
 #optimizing
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
+    x, y = train_loader.next_batch()
+    x, y = x.to(device), y.to(device)
     optimizer.zero_grad() # always  start with zero gradient
     logits, loss = model(x, y)
     loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero 
     optimizer.step()    # updates the parameters and decreases the loss
     print(f"step {i}, loss: {loss.item()}")
 
+
+"""
+In this commit, we expect to not overfit a single batch. This is because we are getting the next batches as well instead of a single batch in the previous commit.
+So, the loss comes down but not too much, thats because in the 50,257 tokens, some of the tokens never occur in the dataset. So there are many easy gains that can be made in the optimization.
+Eg by taking the biases of all the logits that never occur by driving them to -infinity. All of the crazy unicodes or different languages those tokens never occur, so their probability would be very low.
+So the gains that we are seeing is basically deleting the usage of tokens that never occur. Thats most of the loss gain that we see at this scale right now.
+"""
 import sys; sys.exit(0)
 
 # prefix tokens
