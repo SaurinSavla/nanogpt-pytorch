@@ -96,6 +96,9 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)  #Linear Layer
 
+        # weight sharing scheme
+        self.transformer.wte.weight = self.lm_head.weight
+
     def forward(self, idx, targets=None):
         # idx is the indices that we pass i.e. the tokens. They are of shape (B, T)
         B, T = idx.size()
