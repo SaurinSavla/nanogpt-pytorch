@@ -189,6 +189,7 @@ text = text[:1000]
 tokens = enc.encode(text)
 B, T = 4, 32
 buf = torch.tensor(tokens[:B*T + 1])
+buf = buf.to(device)
 x = buf[:-1].view(B, T)
 y = buf[1:].view(B, T)
 
@@ -199,7 +200,15 @@ model = GPT(GPTConfig())    # 124M params, this is the random model initializati
 model.to(device)
 logits, loss = model(x, y)
 
-print(loss)
+#optimizing
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    optimizer.zero_grad() # always  start with zero gradient
+    logits, loss = model(x, y)
+    loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero 
+    optimizer.step()    # updates the parameters and decreases the loss
+    print(f"step {i}, loss: {loss.item()}")
+
 import sys; sys.exit(0)
 
 # prefix tokens
