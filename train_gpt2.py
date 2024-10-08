@@ -242,6 +242,9 @@ if torch.cuda.is_available():
 #get a data batch
 # train_loader = DataLoaderLite(B=16, T=1024) # batch size, max sequence length
 train_loader = DataLoaderLite(B=4, T=32) # smaller batch size and max sequence length to train on cpu
+
+torch.set_float32_matmul_precision('high')  # enable tf32 precision
+
 # get logits
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model! 
@@ -258,10 +261,11 @@ for i in range(50):
     logits, loss = model(x, y)
     loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero
     optimizer.step()    # updates the parameters and decreases the loss
-    # torch.cuda.synchronize()
+    # torch.cuda.synchronize()  # wait for the GPU to finish work
     t1 = time.time()
-    dt = (t1-t0)*1000   # time difference in milliseconds
-    print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms")
+    dt = (t1 - t0)*1000   # time difference in milliseconds
+    tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
+    print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 
 import sys; sys.exit(0)
