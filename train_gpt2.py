@@ -224,6 +224,8 @@ class DataLoaderLite:
         return x, y
 
 # -----------------------------------------------------------------------------
+import time
+
 
 #attempt to autodetect the device
 device = "cpu"
@@ -238,8 +240,8 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
 #get a data batch
-train_loader = DataLoaderLite(B=4, T=32)
-
+# train_loader = DataLoaderLite(B=16, T=1024) # batch size, max sequence length
+train_loader = DataLoaderLite(B=4, T=32) # smaller batch size and max sequence length to train on cpu
 # get logits
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model! 
@@ -249,21 +251,19 @@ model.to(device)
 #optimizing
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad() # always  start with zero gradient
     logits, loss = model(x, y)
-    loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero 
+    loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero
     optimizer.step()    # updates the parameters and decreases the loss
-    print(f"step {i}, loss: {loss.item()}")
+    # torch.cuda.synchronize()
+    t1 = time.time()
+    dt = (t1-t0)*1000   # time difference in milliseconds
+    print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms")
 
 
-"""
-In this commit, we expect to not overfit a single batch. This is because we are getting the next batches as well instead of a single batch in the previous commit.
-So, the loss comes down but not too much, thats because in the 50,257 tokens, some of the tokens never occur in the dataset. So there are many easy gains that can be made in the optimization.
-Eg by taking the biases of all the logits that never occur by driving them to -infinity. All of the crazy unicodes or different languages those tokens never occur, so their probability would be very low.
-So the gains that we are seeing is basically deleting the usage of tokens that never occur. Thats most of the loss gain that we see at this scale right now.
-"""
 import sys; sys.exit(0)
 
 # prefix tokens
