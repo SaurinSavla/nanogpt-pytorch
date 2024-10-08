@@ -247,7 +247,7 @@ torch.set_float32_matmul_precision('high')  # enable tf32 precision
 
 # get logits
 # model = GPT.from_pretrained('gpt2')
-model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model! 
+model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model!
 # model.to('cuda')
 model.to(device)
 
@@ -258,7 +258,8 @@ for i in range(50):
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad() # always  start with zero gradient
-    logits, loss = model(x, y)
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
+        logits, loss = model(x, y)
     loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero
     optimizer.step()    # updates the parameters and decreases the loss
     # torch.cuda.synchronize()  # wait for the GPU to finish work
