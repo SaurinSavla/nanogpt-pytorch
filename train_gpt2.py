@@ -252,7 +252,7 @@ torch.set_float32_matmul_precision('high')  # enable tf32 precision
 
 # get logits
 # model = GPT.from_pretrained('gpt2')
-model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model!
+model = GPT(GPTConfig(vocab_size=50304))    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model!
 # model.to('cuda')
 model.to(device)
 model = torch.compile(model)
@@ -274,13 +274,6 @@ for i in range(50):
     tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
     print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
-"""
-with torch.autocast(device_type=device, dtype=torch.bfloat16):
-    logits, loss = model(x, y)
-
-This line is making the code run veryy slow, hence removed bfloat16. I think it is not supported on cpu? Ill have to check.
-Okay, bfloat16 is not supported on CPU :( My bad!
-"""
 import sys; sys.exit(0)
 
 # prefix tokens
