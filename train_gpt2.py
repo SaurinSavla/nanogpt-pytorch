@@ -250,6 +250,7 @@ torch.set_float32_matmul_precision('high')  # enable tf32 precision
 model = GPT(GPTConfig())    # 124M params, this is the random model initialization that we want to train to make it as good as or better than the GPT2 model!
 # model.to('cuda')
 model.to(device)
+model = torch.compile(model)
 
 #optimizing
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
@@ -273,6 +274,7 @@ with torch.autocast(device_type=device, dtype=torch.bfloat16):
     logits, loss = model(x, y)
 
 This line is making the code run veryy slow, hence removed bfloat16. I think it is not supported on cpu? Ill have to check.
+Okay, bfloat16 is not supported on CPU :( My bad!
 """
 import sys; sys.exit(0)
 
