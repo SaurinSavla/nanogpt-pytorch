@@ -258,8 +258,8 @@ for i in range(50):
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad() # always  start with zero gradient
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
-        logits, loss = model(x, y)
+    # with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
+    logits, loss = model(x, y)
     loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero
     optimizer.step()    # updates the parameters and decreases the loss
     # torch.cuda.synchronize()  # wait for the GPU to finish work
@@ -268,7 +268,12 @@ for i in range(50):
     tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
     print(f"step {i}, loss: {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
+"""
+with torch.autocast(device_type=device, dtype=torch.bfloat16):
+    logits, loss = model(x, y)
 
+This line is making the code run veryy slow, hence removed bfloat16. I think it is not supported on cpu? Ill have to check.
+"""
 import sys; sys.exit(0)
 
 # prefix tokens
