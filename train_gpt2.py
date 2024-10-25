@@ -270,9 +270,19 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
+# This is done to match the batch size used in GPT paper i.e. roughly 0.5M tokens in a single batch. Our small CPU/GPU does not have so much memory hence accumulating all the gradients and then a single update once they are accumulated
+# total_batch_size = 524288   # 2**19, ~0.5M, in number of tokens
+total_batch_size = 1024 # keeping it small (very small) because I have a cpu :(. I want A100 GPUs!!
+B = 4   # micro batch size
+T = 32  # sequence length
+assert total_batch_size % (B*T) == 0, "make sure total_batch_size is divisible by B * T"
+grad_accum_steps = total_batch_size // (B*T)
+print(f"total desired batch size: {total_batch_size}")
+print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+
 #get a data batch
 # train_loader = DataLoaderLite(B=16, T=1024) # batch size, max sequence length
-train_loader = DataLoaderLite(B=4, T=32) # smaller batch size and max sequence length to train on cpu
+train_loader = DataLoaderLite(B=B, T=T) # smaller batch size and max sequence length to train on cpu
 
 torch.set_float32_matmul_precision('high')  # enable tf32 precision
 
@@ -307,12 +317,20 @@ optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, dev
 
 for step in range(max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x, y = x.to(device), y.to(device)
     optimizer.zero_grad() # always  start with zero gradient
-    # with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
-    logits, loss = model(x, y)
-    loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero
+    loss_accum = 0.0
+    for micro_step in range(grad_accum_steps):
+        x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        # with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
+        logits, loss = model(x, y)
+        # we have to scale the loss to account for gradient accumulation,
+        # because the gradients just add on each successive backward().
+        # addition of gradient corresponds to a SUM in the objective, but
+        # instead of a SUM we want MEAN. Scale the loss here so it comes out right
+        loss = loss / grad_accum_steps
+        loss_accum += loss.detach()
+        loss.backward() # backward() adds to the gradients, it is += to the gradients thats why it must be set to zero
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     # determine and set the learning rate for this iteration
     lr = get_lr(step)
@@ -322,9 +340,9 @@ for step in range(max_steps):
     # torch.cuda.synchronize()  # wait for the GPU to finish work
     t1 = time.time()
     dt = t1 - t0   # time difference in milliseconds
-    tokens_processed = train_loader.B * train_loader.T
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
     tokens_per_sec = tokens_processed / dt
-    print(f"step {step:4d} | loss: {loss.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+    print(f"step {step:4d} | loss: {loss_accum.item():.6f} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
 
 import sys; sys.exit(0)
 
