@@ -114,7 +114,6 @@ class GPT(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
-        std = 0.02
         if isinstance(module, nn.Linear):
             if hasattr(module, 'NANOGPT_SCALE_INIT'):
                 std *= (2 * self.config.n_layer) ** -0.5
@@ -209,7 +208,7 @@ class GPT(nn.Module):
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         optim_groups = [
             {'params': decay_params, 'weight_decay': weight_decay},
-            {'params':nodecay_params, 'weight_deacy': 0.0}
+            {'params':nodecay_params, 'weight_decay': 0.0}
         ]
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
@@ -392,7 +391,7 @@ def get_lr(it):
     # 1) linear warmup for warmup_iters steps
     if it < warmup_steps:
         return max_lr * (it+1) / warmup_steps
-    # 2) if it > lr_decay_iters, return min linear rate
+    # 2) if it > lr_decay_iters, return min learning rate
     if it > max_steps:
         return min_lr
     # 3) in between, use cosine decay down to min learning rate
@@ -517,8 +516,8 @@ for step in range(max_steps):
     for micro_step in range(grad_accum_steps):
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
-        # with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
-        logits, loss = model(x, y)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):  # parameters(model.transformer.wte.weight) are still on float32 but our activations(logits) are on bfloat16 (this is mixed precision)
+            logits, loss = model(x, y)
         # we have to scale the loss to account for gradient accumulation,
         # because the gradients just add on each successive backward().
         # addition of gradient corresponds to a SUM in the objective, but
